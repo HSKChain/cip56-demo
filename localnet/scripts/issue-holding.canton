@@ -1,0 +1,81 @@
+// Issue a SimpleHolding on global-sync (CIP-56 Holding interface implementation)
+import com.daml.ledger.api.v2.commands.{Command, CreateCommand}
+import com.daml.ledger.api.v2.value.{Identifier, Record, RecordField, TextMap, Value}
+
+def main(): Unit = {
+  val pShared = participants.all
+    .find(_.name.contains("shared"))
+    .getOrElse(sys.error("participant-shared was not found"))
+
+  val simpleTokenPkg = pShared.packages
+    .list()
+    .find(p => p.name == "simple-token")
+    .map(_.packageId)
+    .getOrElse(sys.error("simple-token package was not found"))
+
+  val globalSync = pShared.synchronizers
+    .list_connected()
+    .find(_.synchronizerAlias.unwrap == "global-sync")
+    .map(_.synchronizerId)
+    .getOrElse(sys.error("Not connected to global-sync"))
+
+  val knownParties = pShared.parties.list().map(_.party)
+  def partyOf(hint: String) = knownParties
+    .find(_.toProtoPrimitive.startsWith(hint + "::"))
+    .getOrElse(sys.error(s"Party not found: $hint"))
+
+  val admin = partyOf("RegistryAdmin")
+  val alice = partyOf("Alice")
+
+  // --- Build the SimpleHolding create arguments ---
+  def vParty(p: com.digitalasset.canton.topology.Party) = Value(Value.Sum.Party(p.toProtoPrimitive))
+  def vText(s: String) = Value(Value.Sum.Text(s))
+  def vNumeric(s: String) = Value(Value.Sum.Numeric(s))
+  def vRecord(fields: (String, Value)*) =
+    Value(Value.Sum.Record(Record(fields = fields.map { case (n, v) => RecordField(n, Some(v)) })))
+
+  val emptyTextMap = Value(Value.Sum.TextMap(TextMap(Seq.empty)))
+  val instrumentId = vRecord("admin" -> vParty(admin), "id" -> vText("HSKD"))
+  val meta = vRecord("values" -> emptyTextMap)
+
+  val createArgs = Record(fields =
+    Seq(
+      RecordField("admin", Some(vParty(admin))),
+      RecordField("owner", Some(vParty(alice))),
+      RecordField("instrumentId", Some(instrumentId)),
+      RecordField("amount", Some(vNumeric("100.0000000000"))),
+      RecordField("meta", Some(meta)),
+    )
+  )
+
+  val cmd = Command(
+    Command.Command.Create(
+      CreateCommand(
+        templateId = Some(Identifier(simpleTokenPkg, "SimpleToken.Holding", "SimpleHolding")),
+        createArguments = Some(createArgs),
+      )
+    )
+  )
+
+  // Admin and owner are both signatories and are hosted on participant-shared, so one actAs submission can include both
+  val tx = pShared.ledger_api.commands.submit(
+    actAs = Seq(admin, alice),
+    commands = Seq(cmd),
+    synchronizerId = Some(globalSync),
+  )
+
+  println(s"[issue] updateId=${tx.updateId} synchronizer=${tx.synchronizerId}")
+  tx.events.foreach { e =>
+    e.event.created.foreach { c =>
+      println(s"[issue] created cid=${c.contractId} template=${c.templateId.map(_.entityName).getOrElse("?")}")
+    }
+  }
+
+  println("=== Alice ACS ===")
+  pShared.ledger_api.state.acs
+    .of_party(alice)
+    .foreach(c => println(s"${c.templateId} cid=${c.contractId}"))
+  println("ISSUE_DONE")
+}
+
+main()

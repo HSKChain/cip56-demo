@@ -1,0 +1,75 @@
+import com.digitalasset.canton.console.LocalInstanceReference
+import com.digitalasset.canton.synchronizer.config.SynchronizerParametersConfig
+import com.digitalasset.canton.admin.api.client.data.StaticSynchronizerParameters
+import com.digitalasset.canton.version.ProtocolVersion
+import com.digitalasset.canton.config.RequireTypes.PositiveInt
+import com.digitalasset.canton.config.RequireTypes.NonNegativeInt
+
+// The image bootstrap-entrypoint.sc calls main() in this script
+def main(): Unit = {
+
+  // Look up nodes by configured name so hyphenated names can be referenced from the console
+  val seqGlobal = sequencers.local
+    .find(_.name == "sequencer-global")
+    .getOrElse(sys.error("sequencer-global was not found"))
+  val seqPrivate = sequencers.local
+    .find(_.name == "sequencer-private")
+    .getOrElse(sys.error("sequencer-private was not found"))
+  val medGlobal = mediators.local
+    .find(_.name == "mediator-global")
+    .getOrElse(sys.error("mediator-global was not found"))
+  val medPrivate = mediators.local
+    .find(_.name == "mediator-private")
+    .getOrElse(sys.error("mediator-private was not found"))
+
+  val pGlobal = participants.local
+    .find(_.name == "participant-global")
+    .getOrElse(sys.error("participant-global was not found"))
+  val pPrivate = participants.local
+    .find(_.name == "participant-private")
+    .getOrElse(sys.error("participant-private was not found"))
+  val pShared = participants.local
+    .find(_.name == "participant-shared")
+    .getOrElse(sys.error("participant-shared was not found"))
+
+  def staticParameters(sequencer: LocalInstanceReference) =
+    SynchronizerParametersConfig()
+      .toStaticSynchronizerParameters(
+        sequencer.config.crypto,
+        ProtocolVersion.v34,
+        NonNegativeInt.zero,
+      )
+      .map(StaticSynchronizerParameters(_))
+      .getOrElse(sys.error("Failed to build staticSynchronizerParameters"))
+
+  // Domain 1: local stand-in for the Global Synchronizer
+  bootstrap.synchronizer(
+    "global-sync",
+    sequencers = Seq(seqGlobal),
+    mediators = Seq(medGlobal),
+    synchronizerOwners = Seq(seqGlobal),
+    synchronizerThreshold = PositiveInt.one,
+    staticSynchronizerParameters = staticParameters(seqGlobal),
+  )
+
+  // Domain 2: private synchronizer
+  bootstrap.synchronizer(
+    "private-sync",
+    sequencers = Seq(seqPrivate),
+    mediators = Seq(medPrivate),
+    synchronizerOwners = Seq(seqPrivate),
+    synchronizerThreshold = PositiveInt.one,
+    staticSynchronizerParameters = staticParameters(seqPrivate),
+  )
+
+  // Connect participant-shared to both synchronizers
+  pGlobal.synchronizers.connect_local(seqGlobal, "global-sync")
+  pPrivate.synchronizers.connect_local(seqPrivate, "private-sync")
+  pShared.synchronizers.connect_local(seqGlobal, "global-sync")
+  pShared.synchronizers.connect_local(seqPrivate, "private-sync")
+
+  Seq(pGlobal, pPrivate, pShared).foreach { p =>
+    val aliases = p.synchronizers.list_connected().map(_.synchronizerAlias.unwrap)
+    logger.info(s"[topology] ${p.name} connected to: ${aliases.mkString(", ")}")
+  }
+}

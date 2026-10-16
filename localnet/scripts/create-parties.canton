@@ -1,0 +1,8 @@
+// Business parties are created by npm run initialize as externally signed parties. Keys stay in cip56-demo/.custody.
+// Do not use parties.enable to create hosted parties, or the same hint will have two party IDs.
+def main(): Unit = {
+  println("Business parties are created by npm run initialize in cip56-demo. This script no longer calls parties.enable.")
+  println("PARTIES_DONE")
+}
+
+main()

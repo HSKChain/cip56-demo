@@ -1,0 +1,15 @@
+// Inspect reassignment command signatures
+def main(): Unit = {
+  val pShared = participants.all
+    .find(_.name.contains("shared"))
+    .getOrElse(sys.error("participant-shared was not found"))
+
+  println("=== submit_unassign ===")
+  pShared.ledger_api.commands.help("submit_unassign")
+  println("=== submit_assign ===")
+  pShared.ledger_api.commands.help("submit_assign")
+  println("=== all commands ===")
+  pShared.ledger_api.commands.help()
+}
+
+main()

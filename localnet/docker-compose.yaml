@@ -1,0 +1,43 @@
+services:
+  canton:
+    container_name: canton-dual-sync
+    image: europe-docker.pkg.dev/da-images/public/docker/canton-base:${CANTON_VERSION:-3.4.9}
+    env_file:
+      - .env
+    environment:
+      LOG_LEVEL_STDOUT: INFO
+      LOG_LEVEL_CANTON: INFO
+    volumes:
+      # entrypoint.sh only recognizes these two fixed paths
+      - ./configs/canton.conf:/app/additional-config.conf
+      - ./configs/bootstrap.canton:/app/bootstrap.sc:ro
+      - ./dars:/canton/host/dars:ro
+    ports:
+      # participant-global
+      - "127.0.0.1:5011:5011"
+      - "127.0.0.1:5012:5012"
+      - "127.0.0.1:5013:5013"
+      # participant-private
+      - "127.0.0.1:5021:5021"
+      - "127.0.0.1:5022:5022"
+      - "127.0.0.1:5023:5023"
+      # participant-shared
+      - "127.0.0.1:5031:5031"
+      - "127.0.0.1:5032:5032"
+      - "127.0.0.1:5033:5033"
+
+  console:
+    container_name: canton-console
+    image: europe-docker.pkg.dev/da-images/public/docker/canton-base:${CANTON_VERSION:-3.4.9}
+    depends_on:
+      - canton
+    environment:
+      LOG_LEVEL_STDOUT: WARN
+      LOG_LEVEL_CANTON: WARN
+    volumes:
+      - ./configs/console.conf:/app/additional-config.conf
+      - ./dars:/canton/host/dars:ro
+      - ./scripts:/canton/host/scripts:ro
+    command: ["--console"]
+    profiles:
+      - console

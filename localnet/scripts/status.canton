@@ -1,0 +1,50 @@
+// Show which synchronizer holds Alice's position and read the view through the CIP-56 Holding interface
+import com.digitalasset.canton.admin.api.client.data.TemplateId
+
+def main(): Unit = {
+  val pShared = participants.all
+    .find(_.name.contains("shared"))
+    .getOrElse(sys.error("participant-shared was not found"))
+
+  val alice = pShared.parties
+    .list()
+    .map(_.party)
+    .find(_.toProtoPrimitive.startsWith("Alice::"))
+    .getOrElse(sys.error("Alice was not found"))
+
+  println("=== Query by template ===")
+  pShared.ledger_api.state.acs
+    .of_party(alice)
+    .foreach { c =>
+      val where = c.entry.activeContract
+        .map(a => s"${a.synchronizerId.split("::").head} (counter=${a.reassignmentCounter})")
+        .getOrElse("<incomplete-reassignment>")
+      println(s"${c.templateId.entityName} cid=${c.contractId.take(16)}... @ $where")
+    }
+
+  val holdingPkg = pShared.packages
+    .list()
+    .find(_.name == "splice-api-token-holding-v1")
+    .map(_.packageId)
+    .getOrElse(sys.error("splice-api-token-holding-v1 was not found"))
+
+  println("=== Query by CIP-56 Holding interface ===")
+  pShared.ledger_api.state.acs
+    .of_party(
+      alice,
+      filterInterfaces = Seq(TemplateId(holdingPkg, "Splice.Api.Token.HoldingV1", "Holding")),
+      verbose = true,
+    )
+    .foreach { c =>
+      c.entry.activeContract.foreach { a =>
+        a.createdEvent.foreach { ev =>
+          ev.interfaceViews.foreach { iv =>
+            println(s"interface=${iv.interfaceId.map(_.entityName).getOrElse("?")} view=${iv.viewValue.map(_.fields.map(f => s"${f.label}=${f.value.map(_.sum.value).getOrElse("")}").mkString(", ")).getOrElse("")}")
+          }
+        }
+      }
+    }
+  println("STATUS_DONE")
+}
+
+main()

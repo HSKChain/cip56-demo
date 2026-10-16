@@ -1,0 +1,88 @@
+// Reassign Alice's SimpleHolding between global-sync and private-sync
+// The source is the synchronizer that currently hosts the contract; the target is the other one
+import com.digitalasset.canton.protocol.LfContractId
+
+def main(): Unit = {
+  val pShared = participants.all
+    .find(_.name.contains("shared"))
+    .getOrElse(sys.error("participant-shared was not found"))
+
+  val connected = pShared.synchronizers.list_connected()
+  def syncId(alias: String) = connected
+    .find(_.synchronizerAlias.unwrap == alias)
+    .map(_.synchronizerId)
+    .getOrElse(sys.error(s"Not connected: $alias"))
+  def aliasOf(id: com.digitalasset.canton.topology.SynchronizerId) =
+    connected.find(_.synchronizerId == id).map(_.synchronizerAlias.unwrap).getOrElse(id.toProtoPrimitive)
+
+  val globalSync = syncId("global-sync")
+  val privateSync = syncId("private-sync")
+
+  val alice = pShared.parties
+    .list()
+    .map(_.party)
+    .find(_.toProtoPrimitive.startsWith("Alice::"))
+    .getOrElse(sys.error("Alice was not found"))
+
+  def holdingEntry = pShared.ledger_api.state.acs
+    .of_party(alice)
+    .find(_.templateId.entityName == "SimpleHolding")
+
+  def locationOf: Option[String] =
+    holdingEntry.flatMap(_.entry.activeContract).map(a => aliasOf(
+      com.digitalasset.canton.topology.SynchronizerId.tryFromString(a.synchronizerId)
+    ))
+
+  def dump(label: String): Unit = {
+    val desc = holdingEntry match {
+      case None => "does not exist"
+      case Some(c) =>
+        c.entry.activeContract
+          .map(a => s"active @ ${aliasOf(com.digitalasset.canton.topology.SynchronizerId.tryFromString(a.synchronizerId))} (counter=${a.reassignmentCounter})")
+          .getOrElse("incomplete reassignment (unassigned, not yet assigned)")
+    }
+    println(s"[state] $label: $desc")
+  }
+
+  dump("before reassignment")
+
+  val entry = holdingEntry.getOrElse(sys.error("SimpleHolding was not found"))
+  val currentSync = entry.entry.activeContract
+    .map(a => com.digitalasset.canton.topology.SynchronizerId.tryFromString(a.synchronizerId))
+    .getOrElse(sys.error("The contract is in an incomplete reassignment. Retry shortly."))
+  val (source, target) =
+    if (currentSync == globalSync) (globalSync, privateSync) else (privateSync, globalSync)
+
+  println(s"[unassign] ${aliasOf(source)} -> ${aliasOf(target)}")
+  val unassigned = pShared.ledger_api.commands.submit_unassign(
+    submitter = alice,
+    contractIds = Seq(LfContractId.assertFromString(entry.contractId)),
+    source = source,
+    target = target,
+  )
+  println(s"[unassign] reassignmentId=${unassigned.reassignmentId}")
+
+  // When every stakeholder is hosted on the same participant, Canton completes assign automatically.
+  // Poll first, then submit assign manually after the timeout.
+  val autoAssigned = (1 to 20).exists { _ =>
+    locationOf.contains(aliasOf(target)) || { Thread.sleep(500); false }
+  }
+
+  if (autoAssigned) {
+    println(s"[assign] completed automatically by Canton (automatic assignment)")
+  } else {
+    println(s"[assign] manually submitting assign to ${aliasOf(target)}")
+    val assigned = pShared.ledger_api.commands.submit_assign(
+      submitter = alice,
+      reassignmentId = unassigned.reassignmentId,
+      source = source,
+      target = target,
+    )
+    println(s"[assign] updateId=${assigned.updateId}")
+  }
+
+  dump("after reassignment")
+  println("REASSIGN_DONE")
+}
+
+main()
